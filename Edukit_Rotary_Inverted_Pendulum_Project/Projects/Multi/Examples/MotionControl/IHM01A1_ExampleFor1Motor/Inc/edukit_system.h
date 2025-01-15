@@ -76,6 +76,11 @@
  *
  */
 
+
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __EDUKIT_H
+#define __EDUKIT_H
+
 #define RCC_SYS_CLOCK_FREQ 84000000 // should equal HAL_RCC_GetSysClockFreq()
 #define RCC_HCLK_FREQ 84000000 // should equal HAL_RCC_GetHCLKFreq()
 
@@ -414,11 +419,26 @@
 
 #define DATA_REPORT_SPEED_SCALE 20
 
+
+/*
+ * Jawad Modifications
+ */
+#define COMMAND_SEPERATOR ','
+#define COMMAND_END ';'
+
+
+#define COMMAND_INDEX_SEND_GAMInput       0
+#define COMMAND_INDEX_SEND_STATUS         1
+#define COMMAND_INDEX_SEND_STATUS_INFO    10
+#define COMMAND_INDEX_SEND_STATUS_ERROR   11
+
+
+
 /*
  * UART DMA definitions
  */
 
-#define UART_RX_BUFFER_SIZE 	(200)
+#define UART_RX_BUFFER_SIZE 	(198)
 #define SERIAL_MSG_MAXLEN 		(100)
 #define SERIAL_MSG_EOF          '\r'
 
@@ -448,8 +468,6 @@ typedef struct
 		);\
 } while(0)
 
-__STATIC_INLINE void DWT_Delay_until_cycle(volatile uint32_t cycle);
-
 extern void pid_filter_control_execute(arm_pid_instance_a_f32 *PID, float * current_error,
 		float * sample_period, float * Deriv_Filt);
 
@@ -469,7 +487,7 @@ extern void select_mode_1(void);
 extern void user_configuration(void);
 extern int Delay_Pulse();
 extern void Main_StepClockHandler();
-extern void apply_acceleration(float * acc, float* target_velocity_prescaled, float t_sample);
+extern void apply_acceleration(float  acc);
 
 extern void user_prompt(void);
 extern void rotor_actuator_high_speed_test(void);
@@ -503,7 +521,6 @@ extern void select_mode_1(void);
 extern void user_configuration(void);
 extern int Delay_Pulse();
 extern void Main_StepClockHandler();
-extern void apply_acceleration(float * acc, float* target_velocity_prescaled, float t_sample);
 
 
 /*
@@ -962,3 +979,6 @@ extern uint16_t min_speed, max_speed, max_accel, max_decel;
 extern uint32_t RxBuffer_ReadIdx;
 extern uint32_t RxBuffer_WriteIdx;
 extern uint32_t readBytes;
+
+
+#endif /* __EDUKIT_H */
