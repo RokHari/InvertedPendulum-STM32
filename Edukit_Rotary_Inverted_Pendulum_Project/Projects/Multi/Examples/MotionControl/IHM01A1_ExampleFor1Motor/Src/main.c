@@ -108,39 +108,13 @@
  *
  */
 
-
-
-
-/*
- * System Configuration Parameters
- *
- * ENABLE_SUSPENDED_PENDULUM_CONTROL is set to 0 for Inverted Pendulum and
- * 									 set to 1 for Suspended Pendulum
- * ENABLE_DUAL_PID is set to 1 to enable control action
- *
- * High Speed 2 millisecond Control Loop delay, 500 Hz Cycle System Configuration
- *
- * Motor Speed Profile Configurations are:
- *
- *						MAX_ACCEL: 3000; 	MAX_DECEL 3000
- * High Speed Mode:		MAX_SPEED: 1000; 	MIN_SPEED 500
- * Medium Speed Mode:	MAX_SPEED: 1000; 	MIN_SPEED 300
- * Low Speed Mode:		MAX_SPEED: 1000; 	MIN_SPEED 200
- * Suspended Mode: 		MAX_SPEED: 1000; 	MIN_SPEED 200
- *
- */
-
-
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "edukit_system.h"
-//#include "control_loop.h"
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
 #include <assert.h>
-
 
 /*
  * Motor Interface Data Structure
@@ -187,13 +161,10 @@ L6474_Init_t gL6474InitParams = {
 
 volatile uint16_t gLastError;
 
-float target_velocity_prescaled;
-
-uint8_t RxBuffer[UART_RX_BUFFER_SIZE];
-
+float target_velocity_prescaled = 0.0f;
 /// PWM period variables used by step interrupt
-volatile uint32_t desired_pwm_period;
-volatile uint32_t current_pwm_period;
+volatile uint32_t desired_pwm_period = 0;
+volatile uint32_t current_pwm_period = 0;
 
 /*
  * Timer 3, UART Transmit, and UART DMA Receive declarations
@@ -201,9 +172,20 @@ volatile uint32_t current_pwm_period;
 TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_rx;
+
 // Serial interface variables
+uint8_t rxBuffer[UART_RX_BUFFER_SIZE] = {};
 static unsigned rxReaderHead = 0;
 
+enum CommandError {
+	CMDERR_OK = 0U,
+	CMDERR_INVALID_COMMAND = 1U,
+	CMDERR_INVALID_DEVICE = 2U
+};
+
+/*
+ * Serial communication defines.
+ */
 #define DATA_FRAME_SIZE 10
 /*
  * Status response data layout:
@@ -225,10 +207,27 @@ static unsigned rxReaderHead = 0;
  */
 #define COMMAND_RESPONSE_SIZE 7
 
-enum CommandError {
-	CMDERR_OK = 0U,
-	CMDERR_INVALID_COMMAND = 1U,
-	CMDERR_INVALID_DEVICE = 2U
+/**
+ * @brief Frame has the following structure:
+ *        byte 0: requested command ID
+ *        byte 1: device ID
+ *        bytes 2-9: command parameters
+ */
+struct DataFrame {
+	uint8_t data[DATA_FRAME_SIZE];
+};
+
+/**
+ * @brief Response has the following structure:
+ *        byte 0: command ID
+ *        byte 1: device ID
+ *        byte 2: error code (0 == OK)
+ *        bytes 3-6: command return values
+ *        or
+ *        bytes 3-12: status
+ */
+struct ResponseData {
+	uint8_t data[STATUS_RESPONSE_SIZE];
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -306,7 +305,6 @@ void apply_acceleration(float acc, float t_period) {
 		if (speed_prescaled == 0) speed_prescaled = 0; // convert negative 0 to positive 0
 	}
 
-
 	uint32_t effective_pwm_period = desired_pwm_period_local;
 
 	float desired_pwm_period_float = roundf(RCC_SYS_CLOCK_FREQ / speed_prescaled);
@@ -351,29 +349,6 @@ void apply_acceleration(float acc, float t_period) {
 	desired_pwm_period = desired_pwm_period_local;
 
 }
-
-/**
- * @brief Frame has the following structure:
- *        byte 0: requested command ID
- *        byte 1: device ID
- *        bytes 2-9: command parameters
- */
-struct DataFrame {
-	uint8_t data[DATA_FRAME_SIZE];
-};
-
-/**
- * @brief Response has the following structure:
- *        byte 0: command ID
- *        byte 1: device ID
- *        byte 2: error code (0 == OK)
- *        bytes 3-6: command return values
- *        or
- *        bytes 3-12: status
- */
-struct ResponseData {
-	uint8_t data[STATUS_RESPONSE_SIZE];
-};
 
 void serialize_uint16(uint16_t value, uint8_t* dest) {
 	dest[0] = (uint8_t)value;
@@ -461,7 +436,7 @@ void init_system(void) {
 	// Initialize UART communication port
 	MX_USART2_UART_Init();
 	// Start DMA just once because it's configured in "circular" mode
-	if (HAL_UART_Receive_DMA(&huart2, RxBuffer, UART_RX_BUFFER_SIZE) != HAL_OK) {
+	if (HAL_UART_Receive_DMA(&huart2, rxBuffer, UART_RX_BUFFER_SIZE) != HAL_OK) {
 		Error_Handler(0);
 	}
 
@@ -472,6 +447,13 @@ void init_system(void) {
 
 	// Start encoder
 	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+
+	// Move the motor on startup since RT control does not work unless the motor was first moved.
+	HAL_Delay(100);
+	BSP_MotorControl_GoTo(0, -3);
+	BSP_MotorControl_WaitWhileActive(0);
+	BSP_MotorControl_GoTo(0, 0);
+	BSP_MotorControl_WaitWhileActive(0);
 }
 
 /**
@@ -498,7 +480,7 @@ bool read_frame(struct DataFrame* frame) {
 
 	// Copy frame data and move the read head.
 	for (unsigned i = 0; i < DATA_FRAME_SIZE; ++i) {
-		frame->data[i] = RxBuffer[rxReaderHead];
+		frame->data[i] = rxBuffer[rxReaderHead];
 		if (++rxReaderHead >= UART_RX_BUFFER_SIZE) {
 			rxReaderHead = 0;
 		}
@@ -698,12 +680,11 @@ struct ResponseData handle_command(const struct DataFrame* frame) {
 		} break;
 		case 252: {
 			// Custom command to end RT control of the motor.
-			BSP_MotorControl_GoTo(deviceId, 0);
-			bool ret = BSP_MotorControl_SoftStop(deviceId);
-			NVIC_SystemReset();
 			desired_pwm_period = 0;
 			current_pwm_period = 0;
-			commandReturnValue[0] = ret;
+			target_velocity_prescaled = 0.0f;
+			NVIC_SystemReset();
+			BSP_MotorControl_GoTo(deviceId, 0);
 		} break;
 		case 253: {
 			// Custom command for reading the system status.
@@ -717,6 +698,9 @@ struct ResponseData handle_command(const struct DataFrame* frame) {
 		} break;
 		case 254:
 			// Custom command for RT control of the motor.
+			// Once RT control command is issued, all high level API motor controls will most
+			// likely no longer work correctly. Use command 252 to reset the RT control before
+			// using them.
 			apply_acceleration(deserialize_float(params), deserialize_float(params + 4));
 			break;
 		default:
@@ -727,11 +711,12 @@ struct ResponseData handle_command(const struct DataFrame* frame) {
 }
 
 void send_response(struct ResponseData* response) {
-	if (response->data[0] == 254) {
-		// No response is expected for RT control command.
+	if (response->data[0] == 254 || response->data[0] == 252) {
+		// No response is expected for RT commands.
 		return;
 	}
 	if (response->data[0] == 253) {
+		// Respond with the status.
 		HAL_UART_Transmit(&huart2, response->data, STATUS_RESPONSE_SIZE, HAL_MAX_DELAY);
 		return;
 	}
@@ -754,7 +739,6 @@ int main(void) {
 	return 0;
 }
 
-/* TIM3 init function */
 void MX_TIM3_Init(void) {
 
 	TIM_Encoder_InitTypeDef sConfig;
@@ -786,7 +770,6 @@ void MX_TIM3_Init(void) {
 	}
 }
 
-/* USART2 init function */
 void MX_USART2_UART_Init(void) {
 	/* DMA controller clock enable */
 	__HAL_RCC_DMA1_CLK_ENABLE()
