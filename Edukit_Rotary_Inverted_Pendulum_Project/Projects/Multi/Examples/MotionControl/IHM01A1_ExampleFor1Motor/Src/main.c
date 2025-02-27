@@ -683,6 +683,8 @@ struct ResponseData handle_command(const struct DataFrame* frame) {
 			desired_pwm_period = 0;
 			current_pwm_period = 0;
 			target_velocity_prescaled = 0.0f;
+			BSP_MotorControl_GoTo(0, -0);
+			BSP_MotorControl_WaitWhileActive(0);
 			NVIC_SystemReset();
 			BSP_MotorControl_GoTo(deviceId, 0);
 		} break;
